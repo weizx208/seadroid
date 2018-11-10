@@ -16,7 +16,9 @@ android {
         ndk {
             abiFilters 'armeabi', 'armeabi-v7a', 'x86'
         }
+
     }
+
 
     lintOptions {
         abortOnError false

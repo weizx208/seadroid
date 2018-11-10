@@ -39,6 +39,7 @@ import com.seafile.seadroid2.ssl.CertsManager;
 import com.seafile.seadroid2.transfer.TransferService;
 import com.seafile.seadroid2.ui.CopyMoveContext;
 import com.seafile.seadroid2.ui.NavContext;
+import com.seafile.seadroid2.ui.WidgetUtils;
 import com.seafile.seadroid2.ui.activity.BrowserActivity;
 import com.seafile.seadroid2.ui.adapter.SeafItemAdapter;
 import com.seafile.seadroid2.ui.dialog.SslConfirmDialog;
@@ -46,6 +47,7 @@ import com.seafile.seadroid2.ui.dialog.TaskDialog;
 import com.seafile.seadroid2.util.ConcurrentAsyncTask;
 import com.seafile.seadroid2.util.Utils;
 
+import java.io.File;
 import java.net.HttpURLConnection;
 import java.util.List;
 import java.util.Map;
@@ -53,9 +55,12 @@ import java.util.Map;
 
 public class ReposFragment extends ListFragment {
 
+    public static final int FILE_ACTION_EXPORT = 0;
+    public static final int FILE_ACTION_COPY = 1;
+    public static final int FILE_ACTION_MOVE = 2;
+    public static final int FILE_ACTION_STAR = 3;
     private static final String DEBUG_TAG = "ReposFragment";
     private static final String KEY_REPO_SCROLL_POSITION = "repo_scroll_position";
-
     private static final int REFRESH_ON_RESUME = 0;
     private static final int REFRESH_ON_PULL = 1;
     private static final int REFRESH_ON_CLICK = 2;
@@ -65,27 +70,19 @@ public class ReposFragment extends ListFragment {
      * flag to stop refreshing when nav to other directory
      */
     private static int mPullToRefreshStopRefreshing = 0;
-
+    private final Handler mTimer = new Handler();
     private SeafItemAdapter adapter;
     private BrowserActivity mActivity = null;
     private ActionMode mActionMode;
     private CopyMoveContext copyMoveContext;
     private Map<String, ScrollState> scrollPostions;
-
-    public static final int FILE_ACTION_EXPORT = 0;
-    public static final int FILE_ACTION_COPY = 1;
-    public static final int FILE_ACTION_MOVE = 2;
-    public static final int FILE_ACTION_STAR = 3;
-
     private SwipeRefreshLayout refreshLayout;
     private ListView mListView;
     private ImageView mEmptyView;
     private View mProgressContainer;
     private View mListContainer;
     private TextView mErrorText;
-
     private boolean isTimerStarted;
-    private final Handler mTimer = new Handler();
 
     private DataManager getDataManager() {
         return mActivity.getDataManager();
@@ -101,10 +98,6 @@ public class ReposFragment extends ListFragment {
 
     public ImageView getEmptyView() {
         return mEmptyView;
-    }
-
-    public interface OnFileSelectedListener {
-        void onFileSelected(SeafDirent fileName);
     }
 
     @Override
@@ -214,7 +207,14 @@ public class ReposFragment extends ListFragment {
             public void onClick(DialogInterface dialog, int which) {
                 switch (which) {
                     case R.id.share:
-                        mActivity.showShareDialog(repoID, path, false, dirent.size,dirent.name);
+                        mActivity.showShareDialog(repoID, path, false, dirent.size, dirent.name);
+                        break;
+                    case R.id.open:
+                        final File localFile = getDataManager().getLocalCachedFile(repoName, repoID, path, null);
+                        if (localFile != null) {
+                            WidgetUtils.showFile(mActivity, localFile);
+                            return;
+                        }
                         break;
                     case R.id.delete:
                         mActivity.deleteFile(repoID, repoName, path);
@@ -659,16 +659,6 @@ public class ReposFragment extends ListFragment {
         }
     }
 
-    private class ScrollState {
-        public int index;
-        public int top;
-
-        public ScrollState(int index, int top) {
-            this.index = index;
-            this.top = top;
-        }
-    }
-
     private void saveDirentScrollPosition(String repoId, String currentPath) {
         final String pathJoin = Utils.pathJoin(repoId, currentPath);
         final int index = mListView.getFirstVisiblePosition();
@@ -746,6 +736,75 @@ public class ReposFragment extends ListFragment {
         }
     }
 
+    private void showError(int strID) {
+        showError(mActivity.getResources().getString(strID));
+    }
+
+    private void showError(String msg) {
+        mProgressContainer.setVisibility(View.GONE);
+        mListContainer.setVisibility(View.GONE);
+
+        adapter.clear();
+        adapter.notifyChanged();
+
+        mErrorText.setText(msg);
+        mErrorText.setVisibility(View.VISIBLE);
+        mErrorText.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                refresh();
+            }
+        });
+    }
+
+    public void showLoading(boolean show) {
+        mErrorText.setVisibility(View.GONE);
+        if (show) {
+            mProgressContainer.startAnimation(AnimationUtils.loadAnimation(
+                    mActivity, android.R.anim.fade_in));
+            mListContainer.startAnimation(AnimationUtils.loadAnimation(
+                    mActivity, android.R.anim.fade_out));
+
+            mProgressContainer.setVisibility(View.VISIBLE);
+            mListContainer.setVisibility(View.INVISIBLE);
+        } else {
+            mProgressContainer.startAnimation(AnimationUtils.loadAnimation(
+                    mActivity, android.R.anim.fade_out));
+            mListContainer.startAnimation(AnimationUtils.loadAnimation(
+                    mActivity, android.R.anim.fade_in));
+
+            mProgressContainer.setVisibility(View.GONE);
+            mListContainer.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void showPasswordDialog() {
+        NavContext nav = mActivity.getNavContext();
+        String repoName = nav.getRepoName();
+        String repoID = nav.getRepoID();
+
+        mActivity.showPasswordDialog(repoName, repoID, new TaskDialog.TaskDialogListener() {
+            @Override
+            public void onTaskSuccess() {
+                refreshView();
+            }
+        });
+    }
+
+    public interface OnFileSelectedListener {
+        void onFileSelected(SeafDirent fileName);
+    }
+
+    private class ScrollState {
+        public int index;
+        public int top;
+
+        public ScrollState(int index, int top) {
+            this.index = index;
+            this.top = top;
+        }
+    }
+
     private class LoadTask extends AsyncTask<Void, Void, List<SeafRepo>> {
         SeafException err = null;
         DataManager dataManager;
@@ -811,7 +870,8 @@ public class ReposFragment extends ListFragment {
                 String lastUpdate = getDataManager().getLastPullToRefreshTime(DataManager.PULL_TO_REFRESH_LAST_TIME_FOR_REPOS_FRAGMENT);
                 //mListView.onRefreshComplete(lastUpdate);
                 refreshLayout.setRefreshing(false);
-                getDataManager().saveLastPullToRefreshTime(System.currentTimeMillis(), DataManager.PULL_TO_REFRESH_LAST_TIME_FOR_REPOS_FRAGMENT);
+                getDataManager().saveLastPullToRefreshTime(System.currentTimeMillis(), DataManager
+                        .PULL_TO_REFRESH_LAST_TIME_FOR_REPOS_FRAGMENT);
                 mPullToRefreshStopRefreshing = 0;
             }
 
@@ -861,48 +921,6 @@ public class ReposFragment extends ListFragment {
                 Log.i(DEBUG_TAG, "failed to load repos");
                 showError(R.string.error_when_load_repos);
             }
-        }
-    }
-
-    private void showError(int strID) {
-        showError(mActivity.getResources().getString(strID));
-    }
-
-    private void showError(String msg) {
-        mProgressContainer.setVisibility(View.GONE);
-        mListContainer.setVisibility(View.GONE);
-
-        adapter.clear();
-        adapter.notifyChanged();
-
-        mErrorText.setText(msg);
-        mErrorText.setVisibility(View.VISIBLE);
-        mErrorText.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                refresh();
-            }
-        });
-    }
-
-    public void showLoading(boolean show) {
-        mErrorText.setVisibility(View.GONE);
-        if (show) {
-            mProgressContainer.startAnimation(AnimationUtils.loadAnimation(
-                    mActivity, android.R.anim.fade_in));
-            mListContainer.startAnimation(AnimationUtils.loadAnimation(
-                    mActivity, android.R.anim.fade_out));
-
-            mProgressContainer.setVisibility(View.VISIBLE);
-            mListContainer.setVisibility(View.INVISIBLE);
-        } else {
-            mProgressContainer.startAnimation(AnimationUtils.loadAnimation(
-                    mActivity, android.R.anim.fade_out));
-            mListContainer.startAnimation(AnimationUtils.loadAnimation(
-                    mActivity, android.R.anim.fade_in));
-
-            mProgressContainer.setVisibility(View.GONE);
-            mListContainer.setVisibility(View.VISIBLE);
         }
     }
 
@@ -986,7 +1004,8 @@ public class ReposFragment extends ListFragment {
                 String lastUpdate = getDataManager().getLastPullToRefreshTime(DataManager.PULL_TO_REFRESH_LAST_TIME_FOR_REPOS_FRAGMENT);
                 //mListView.onRefreshComplete(lastUpdate);
                 refreshLayout.setRefreshing(false);
-                getDataManager().saveLastPullToRefreshTime(System.currentTimeMillis(), DataManager.PULL_TO_REFRESH_LAST_TIME_FOR_REPOS_FRAGMENT);
+                getDataManager().saveLastPullToRefreshTime(System.currentTimeMillis(), DataManager
+                        .PULL_TO_REFRESH_LAST_TIME_FOR_REPOS_FRAGMENT);
                 mPullToRefreshStopRefreshing = 0;
             }
 
@@ -1042,19 +1061,6 @@ public class ReposFragment extends ListFragment {
             getDataManager().setDirsRefreshTimeStamp(myRepoID, myPath);
             updateAdapterWithDirents(dirents, false);
         }
-    }
-
-    private void showPasswordDialog() {
-        NavContext nav = mActivity.getNavContext();
-        String repoName = nav.getRepoName();
-        String repoID = nav.getRepoID();
-
-        mActivity.showPasswordDialog(repoName, repoID, new TaskDialog.TaskDialogListener() {
-            @Override
-            public void onTaskSuccess() {
-                refreshView();
-            }
-        });
     }
 
     /**
